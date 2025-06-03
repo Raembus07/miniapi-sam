@@ -5,27 +5,25 @@ using MongoDB.Driver;
 public class MongoMovieService : IMovieService
 {
     private readonly IOptions<DatabaseSettings> _options;
-
-    List<Movie> movies = new List<Movie> { };
+    private readonly IMongoCollection<Movie> _collection;
 
     public MongoMovieService(IOptions<DatabaseSettings> options)
     {
         _options = options;
+        var client = new MongoClient(_options.Value.ConnectionString);
+        var database = client.GetDatabase("movies");
+        _collection = database.GetCollection<Movie>("movies");
     }
 
     public IResult Check()
     {
         var mongoDbConnectionString = _options.Value.ConnectionString;
-
         try
         {
             var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             var cancellationToken = cancellationTokenSource.Token;
-
             var client = new MongoClient(mongoDbConnectionString);
-
             var databases = client.ListDatabaseNames(cancellationToken).ToList();
-
             return Results.Ok("Zugriff auf MongoDB ok. Datenbanken: " + string.Join(", ", databases));
         }
         catch (TimeoutException ex)
@@ -40,62 +38,59 @@ public class MongoMovieService : IMovieService
 
     public IResult Create(Movie movie)
     {
-        if (movies.Contains(movie))
+        if (string.IsNullOrEmpty(movie.Id) || _collection.Find(m => m.Id == movie.Id).Any())
         {
-            return Results.Conflict("Movie already exists.");
+            return Results.Conflict("Movie with this ID already exists.");
         }
-        else
-        {
-            movies.Add(movie);
-            return Results.Ok(movie);
-        }
+        _collection.InsertOne(movie);
+        return Results.Ok(movie);
     }
 
     public IResult Get()
     {
+        var movies = _collection.Find(_ => true).ToList();
         return Results.Ok(movies);
     }
+
     public IResult Get(string id)
     {
         if (string.IsNullOrEmpty(id))
         {
             return Results.NotFound("Movie not found.");
         }
-        else if (!movies.Any(m => m.Id == id))
+        var movie = _collection.Find(m => m.Id == id).FirstOrDefault();
+        if (movie == null)
         {
             return Results.NotFound("Movie not found.");
         }
-        else
-        {
-            var movie = movies.First(m => m.Id == id);
-            return Results.Ok(movie);
-        }
+        return Results.Ok(movie);
     }
+
     public IResult Update(string id, Movie movie)
     {
-        if (string.IsNullOrEmpty(id) || !movies.Any(m => m.Id == id))
+        if (string.IsNullOrEmpty(id))
         {
             return Results.NotFound("Movie not found.");
         }
-
-        var existingMovie = movies.First(m => m.Id == id);
-        existingMovie.Title = movie.Title;
-        existingMovie.Year = movie.Year;
-        existingMovie.Summary = movie.Summary;
-        existingMovie.Actors = movie.Actors;
-
-        return Results.Ok(existingMovie);
+        var result = _collection.ReplaceOne(m => m.Id == id, movie);
+        if (result.MatchedCount == 0)
+        {
+            return Results.NotFound("Movie not found.");
+        }
+        return Results.Ok(movie);
     }
+
     public IResult Remove(string id)
     {
-        if (string.IsNullOrEmpty(id) || !movies.Any(m => m.Id == id))
+        if (string.IsNullOrEmpty(id))
         {
             return Results.NotFound("Movie not found.");
         }
-
-        var movieToDelete = movies.First(m => m.Id == id);
-        movies.Remove(movieToDelete);
-
+        var result = _collection.DeleteOne(m => m.Id == id);
+        if (result.DeletedCount == 0)
+        {
+            return Results.NotFound("Movie not found.");
+        }
         return Results.Ok("Movie deleted successfully.");
     }
 }
